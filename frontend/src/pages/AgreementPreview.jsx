@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import {
   ArrowLeft,
@@ -9,7 +9,8 @@ import {
   ShieldAlert,
   Sparkles,
 } from 'lucide-react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
+import apiClient, { getApiErrorMessage } from '../api/apiClient.js'
 import getMilestoneAmounts from '../utils/milestoneAmounts.js'
 
 const allowedTimelines = ['1–2 weeks', '3–4 weeks', '4–6 weeks', '1–2 months', '3+ months']
@@ -105,7 +106,7 @@ function MissingAgreementState({ project, selectedProvider, terms }) {
       <div className="mt-6 flex w-full flex-col justify-center gap-3 sm:w-auto sm:flex-row">
         <Link
           className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] hover:bg-[#d4ff7c]"
-          to={hasProject ? '/project/negotiation' : '/project/matching'}
+          to={hasProject && project?._id ? `/project/${project._id}/negotiation` : hasProject ? '/project/negotiation' : '/project/matching'}
           state={hasProject ? previousState : { project }}
         >
           <ArrowLeft size={14} aria-hidden="true" />
@@ -122,27 +123,199 @@ function MissingAgreementState({ project, selectedProvider, terms }) {
   )
 }
 
+function LoadingAgreementState() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#0a0c0b] px-4 py-12 text-center text-[11px] text-slate-400" role="status" aria-busy="true">
+      Loading saved agreement preview…
+    </main>
+  )
+}
+
+function AgreementLoadError({ message, onRetry }) {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-[#0a0c0b] px-4 py-12 text-center text-slate-100">
+      <span className="grid h-12 w-12 place-items-center rounded-2xl border border-red-300/15 bg-red-300/[0.04] text-red-200">
+        <CircleHelp size={22} aria-hidden="true" />
+      </span>
+      <h1 className="mt-5 text-2xl font-semibold tracking-[-0.05em]">Agreement preview could not be loaded</h1>
+      <p className="mt-2 max-w-md text-[11px] leading-5 text-slate-400">{message}</p>
+      <button
+        className="mt-6 inline-flex min-h-10 items-center justify-center rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] hover:bg-[#d4ff7c]"
+        type="button"
+        onClick={onRetry}
+      >
+        Retry loading agreement
+      </button>
+    </main>
+  )
+}
+
+function MissingPersistedAgreementData({ project, hasProvider }) {
+  const missingProvider = !hasProvider
+  const heading = missingProvider
+    ? 'No selected provider is available'
+    : 'Negotiation terms are not available'
+  const message = missingProvider
+    ? 'Select a provider for this project before opening its agreement preview.'
+    : 'Save valid negotiation terms before creating an agreement preview.'
+
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-[#0a0c0b] px-4 py-12 text-center text-slate-100">
+      <span className="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-slate-400">
+        <CircleHelp size={22} aria-hidden="true" />
+      </span>
+      <p className="mt-5 text-[8px] font-semibold uppercase tracking-[0.14em] text-[#c7f36a]">PREVIEW ONLY · NOT SIGNED</p>
+      <h1 className="mt-2 text-2xl font-semibold tracking-[-0.05em]">{heading}</h1>
+      <p className="mt-2 max-w-md text-[11px] leading-5 text-slate-400">{message}</p>
+      <div className="mt-6 flex w-full flex-col justify-center gap-3 sm:w-auto sm:flex-row">
+        <Link
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] hover:bg-[#d4ff7c]"
+          to={missingProvider ? '/project/matching' : `/project/${project._id}/negotiation`}
+          state={missingProvider ? { project } : undefined}
+        >
+          <ArrowLeft size={14} aria-hidden="true" />
+          {missingProvider ? 'Back to Provider Matching' : 'Back to Negotiation'}
+        </Link>
+        <Link
+          className="inline-flex min-h-10 items-center justify-center rounded-lg border border-white/10 px-4 text-[10px] font-medium text-slate-300 hover:bg-white/[0.04]"
+          to="/dashboard"
+        >
+          Return to Dashboard
+        </Link>
+      </div>
+    </main>
+  )
+}
+
+function createPreviewSession() {
+  const timestamp = Date.now()
+  const randomSuffix = Math.random().toString(36).slice(2, 7).toUpperCase()
+  return {
+    createdAt: new Date(timestamp),
+    reference: `DF-DEMO-${timestamp.toString(36).toUpperCase()}-${randomSuffix}`,
+  }
+}
+
 function AgreementPreview() {
   const location = useLocation()
-  const { project, selectedProvider, terms } = location.state ?? {}
+  const { projectId } = useParams()
+  const legacyState = location.state ?? {}
   const reduceMotion = useReducedMotion()
+  const [persistedAgreement, setPersistedAgreement] = useState(null)
+  const [isLoadingAgreement, setIsLoadingAgreement] = useState(Boolean(projectId))
+  const [agreementLoadError, setAgreementLoadError] = useState('')
+  const [retryCount, setRetryCount] = useState(0)
   const [hasReviewed, setHasReviewed] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
-  const [previewSession] = useState(() => {
-    const timestamp = Date.now()
-    const randomSuffix = Math.random().toString(36).slice(2, 7).toUpperCase()
-    return {
-      createdAt: new Date(timestamp),
-      reference: `DF-DEMO-${timestamp.toString(36).toUpperCase()}-${randomSuffix}`,
+  const [legacyPreviewSession] = useState(() => projectId ? null : createPreviewSession())
+
+  useEffect(() => {
+    if (!projectId) return undefined
+
+    const controller = new AbortController()
+
+    async function loadAgreement() {
+      setIsLoadingAgreement(true)
+      setAgreementLoadError('')
+
+      try {
+        const { data: projectResponse } = await apiClient.get(`/projects/${projectId}`, {
+          signal: controller.signal,
+        })
+        if (!projectResponse?.success || !projectResponse.data?._id) {
+          throw new Error('The API returned an unexpected project response.')
+        }
+
+        const projectData = projectResponse.data
+        const selectedProvider = projectData.selectedProviderId
+          && typeof projectData.selectedProviderId === 'object'
+          ? projectData.selectedProviderId
+          : null
+        const negotiation = projectData.negotiation
+          ? {
+            ...projectData.negotiation,
+            price: Number(projectData.negotiation.price),
+            deliverables: [...projectData.negotiation.deliverables],
+            milestones: projectData.negotiation.milestones.map((milestone) => ({
+              ...milestone,
+              percentage: Number(milestone.percentage),
+            })),
+          }
+          : null
+
+        if (!selectedProvider || !negotiation || !isValidAgreementData(projectData, selectedProvider, negotiation)) {
+          setPersistedAgreement({
+            project: projectData,
+            selectedProvider,
+            terms: negotiation,
+            agreementPreview: null,
+          })
+          return
+        }
+
+        const { data: previewResponse } = await apiClient.patch(
+          `/projects/${projectId}/agreement-preview`,
+          {},
+          { signal: controller.signal },
+        )
+        if (
+          !previewResponse?.success
+          || !previewResponse.data?.agreementPreview?.previewReference
+          || !previewResponse.data.agreementPreview.previewedAt
+        ) {
+          throw new Error('The API did not return persisted agreement preview metadata.')
+        }
+
+        const previewProject = previewResponse.data
+        const previewProvider = previewProject.selectedProviderId
+          && typeof previewProject.selectedProviderId === 'object'
+          ? previewProject.selectedProviderId
+          : selectedProvider
+        setPersistedAgreement({
+          project: previewProject,
+          selectedProvider: previewProvider,
+          terms: negotiation,
+          agreementPreview: previewProject.agreementPreview,
+        })
+      } catch (error) {
+        if (controller.signal.aborted) return
+        setAgreementLoadError(getApiErrorMessage(error, error.message || 'The saved agreement preview could not be loaded. Please try again.'))
+      } finally {
+        if (!controller.signal.aborted) setIsLoadingAgreement(false)
+      }
     }
-  })
+
+    loadAgreement()
+    return () => controller.abort()
+  }, [projectId, retryCount])
+
+  const project = projectId ? persistedAgreement?.project : legacyState.project
+  const selectedProvider = projectId ? persistedAgreement?.selectedProvider : legacyState.selectedProvider
+  const terms = projectId ? persistedAgreement?.terms : legacyState.terms
+  const previewMetadata = projectId ? persistedAgreement?.agreementPreview : legacyPreviewSession
+
+  if (projectId && isLoadingAgreement) return <LoadingAgreementState />
+  if (projectId && agreementLoadError) {
+    return <AgreementLoadError message={agreementLoadError} onRetry={() => setRetryCount((count) => count + 1)} />
+  }
+  if (projectId && persistedAgreement && (!selectedProvider || !terms)) {
+    return (
+      <MissingPersistedAgreementData
+        project={project}
+        hasProvider={Boolean(selectedProvider)}
+      />
+    )
+  }
 
   if (!isValidAgreementData(project, selectedProvider, terms)) {
     return <MissingAgreementState project={project} selectedProvider={selectedProvider} terms={terms} />
   }
 
+  if (!previewMetadata) return <LoadingAgreementState />
+
   const price = Number(terms.price)
   const milestoneAmounts = getMilestoneAmounts(terms.milestones, price)
+  const previewedAt = new Date(previewMetadata.previewedAt ?? previewMetadata.createdAt)
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#0a0c0b] text-slate-100">
@@ -200,14 +373,14 @@ function AgreementPreview() {
                 </div>
               </div>
               <div className="rounded-lg border border-white/[0.08] bg-[#0b0e0c] px-3 py-2 sm:text-right">
-                <p className="text-[8px] text-slate-500">Demo reference · not a stored contract ID</p>
-                <p className="mt-1 break-all font-mono text-[9px] text-slate-300">{previewSession.reference}</p>
+                <p className="text-[8px] text-slate-500">Preview reference · not a contract ID</p>
+                <p className="mt-1 break-all font-mono text-[9px] text-slate-300">{previewMetadata.previewReference ?? previewMetadata.reference}</p>
               </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-[8px] text-slate-500">
               <span className="inline-flex items-center gap-1.5">
                 <CalendarDays size={12} aria-hidden="true" />
-                Local preview date: {new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(previewSession.createdAt)}
+                Preview first created: {new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(previewedAt)}
               </span>
               <span>No signing date or official record</span>
             </div>
@@ -317,7 +490,7 @@ function AgreementPreview() {
                 <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Link
                     className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-4 text-[9px] font-medium text-slate-300 transition-colors hover:bg-white/[0.04] hover:text-white"
-                    to="/project/negotiation"
+                    to={project?._id ? `/project/${project._id}/negotiation` : '/project/negotiation'}
                     state={{ project, selectedProvider, terms }}
                   >
                     <ArrowLeft size={13} aria-hidden="true" /> Return to Negotiation to edit
@@ -362,7 +535,7 @@ function AgreementPreview() {
         </section>
 
         <p className="mt-4 text-center text-[8px] leading-4 text-slate-600">
-          This demo reference and local preview date are generated in this browser session; they do not represent a stored contract or signing record.
+          Preview metadata is stored on this project. It is not a contract, signing record, provider acceptance, or payment.
         </p>
       </motion.main>
     </div>

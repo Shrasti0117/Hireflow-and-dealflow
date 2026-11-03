@@ -18,7 +18,7 @@ function ProviderCard({
   onSelect,
 }) {
   const reduceMotion = useReducedMotion()
-  const compareId = `compare-${provider.id}`
+  const compareId = `compare-${provider._id}`
 
   return (
     <motion.article

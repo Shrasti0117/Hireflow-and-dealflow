@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import {
   ArrowRight,
@@ -12,8 +12,8 @@ import {
   X,
 } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import apiClient, { getApiErrorMessage } from '../api/apiClient.js'
 import ProviderCard from '../components/ProviderCard.jsx'
-import demoProviders from '../data/demoProviders.js'
 import { calculateMatchScore } from '../utils/matchScore.js'
 
 const formatINR = (amount) => new Intl.NumberFormat('en-IN', {
@@ -128,9 +128,9 @@ function ComparisonPanel({ providers, scores, onRemove }) {
   }
 
   const rows = [
-    { label: 'Demo match score', value: (provider) => scores[provider.id]?.score === null ? 'Not enough information' : `${scores[provider.id]?.score ?? 'Not enough information'}%` },
+    { label: 'Demo match score', value: (provider) => scores[provider._id]?.score === null ? 'Not enough information' : `${scores[provider._id]?.score ?? 'Not enough information'}%` },
     { label: 'Matching required skills', value: (provider) => {
-      const skills = scores[provider.id]?.matchingSkills ?? []
+      const skills = scores[provider._id]?.matchingSkills ?? []
       return skills.length ? skills.join(', ') : 'No required skills matched'
     } },
     { label: 'Proposed budget', value: (provider) => formatINR(provider.proposedBudget) },
@@ -152,14 +152,14 @@ function ComparisonPanel({ providers, scores, onRemove }) {
             <tr className="bg-white/[0.025]">
               <th className="w-36 px-3 py-3 text-[9px] font-medium text-slate-500">Compare</th>
               {providers.map((provider) => (
-                <th className="min-w-[155px] px-3 py-3 align-top" key={provider.id}>
+                <th className="min-w-[155px] px-3 py-3 align-top" key={provider._id}>
                   <div className="flex items-start justify-between gap-2">
                     <span className="break-words text-[10px] font-semibold leading-4 text-slate-100">{provider.displayName}</span>
                     <button
                       className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 hover:bg-white/[0.06] hover:text-white"
                       type="button"
                       aria-label={`Remove ${provider.displayName} from comparison`}
-                      onClick={() => onRemove(provider.id)}
+                      onClick={() => onRemove(provider._id)}
                     >
                       <X size={13} aria-hidden="true" />
                     </button>
@@ -173,7 +173,7 @@ function ComparisonPanel({ providers, scores, onRemove }) {
               <tr className="border-t border-white/[0.07]" key={row.label}>
                 <th className="px-3 py-3 text-[9px] font-medium text-slate-500">{row.label}</th>
                 {providers.map((provider) => (
-                  <td className="break-words px-3 py-3 text-[9px] leading-4 text-slate-300" key={provider.id}>{row.value(provider)}</td>
+                  <td className="break-words px-3 py-3 text-[9px] leading-4 text-slate-300" key={provider._id}>{row.value(provider)}</td>
                 ))}
               </tr>
             ))}
@@ -189,46 +189,78 @@ function ProviderMatching() {
   const navigate = useNavigate()
   const reduceMotion = useReducedMotion()
   const project = location.state?.project
+  const [providers, setProviders] = useState([])
+  const [isLoadingProviders, setIsLoadingProviders] = useState(true)
+  const [providersError, setProvidersError] = useState('')
+  const [retryCount, setRetryCount] = useState(0)
   const [sortBy, setSortBy] = useState('match')
   const [skillFilter, setSkillFilter] = useState('')
   const [comparedIds, setComparedIds] = useState([])
   const [pendingProvider, setPendingProvider] = useState(null)
   const [selectedProvider, setSelectedProvider] = useState(null)
+  const [isSavingSelection, setIsSavingSelection] = useState(false)
+  const [selectionError, setSelectionError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadProviders() {
+      setIsLoadingProviders(true)
+      setProvidersError('')
+
+      try {
+        const { data } = await apiClient.get('/providers', { signal: controller.signal })
+        if (!Array.isArray(data?.data)) {
+          throw new Error('The API returned an unexpected provider list.')
+        }
+
+        setProviders(data.data.filter((provider) => provider.isDemo === true && provider._id))
+      } catch (error) {
+        if (controller.signal.aborted) return
+        setProvidersError(getApiErrorMessage(error, error.message || 'Demo providers could not be loaded. Please try again.'))
+      } finally {
+        if (!controller.signal.aborted) setIsLoadingProviders(false)
+      }
+    }
+
+    loadProviders()
+    return () => controller.abort()
+  }, [retryCount])
 
   const providerScores = useMemo(() => Object.fromEntries(
-    demoProviders.map((provider) => [provider.id, calculateMatchScore(project, provider)]),
-  ), [project])
+    providers.map((provider) => [provider._id, calculateMatchScore(project, provider)]),
+  ), [project, providers])
 
   const visibleProviders = useMemo(() => {
     const keyword = skillFilter.trim().toLowerCase()
-    const filtered = demoProviders.filter((provider) => (
+    const filtered = providers.filter((provider) => (
       !keyword || provider.skills.some((skill) => skill.toLowerCase().includes(keyword))
     ))
 
     return filtered.sort((first, second) => {
       if (sortBy === 'price') return first.proposedBudget - second.proposedBudget
       if (sortBy === 'delivery') return first.deliveryMaxWeeks - second.deliveryMaxWeeks
-      const firstScore = providerScores[first.id].score
-      const secondScore = providerScores[second.id].score
+      const firstScore = providerScores[first._id].score
+      const secondScore = providerScores[second._id].score
       if (firstScore === null) return secondScore === null ? 0 : 1
       if (secondScore === null) return -1
       return secondScore - firstScore
     })
-  }, [providerScores, skillFilter, sortBy])
+  }, [providerScores, providers, skillFilter, sortBy])
 
   if (!isProjectPresent(project)) return <EmptyProjectState />
 
   const comparedProviders = comparedIds
-    .map((id) => demoProviders.find((provider) => provider.id === id))
+    .map((id) => providers.find((provider) => provider._id === id))
     .filter(Boolean)
 
   const handleCompareChange = (provider, shouldCompare) => {
     setComparedIds((current) => {
       if (shouldCompare) {
-        if (current.length >= 3 || current.includes(provider.id)) return current
-        return [...current, provider.id]
+        if (current.length >= 3 || current.includes(provider._id)) return current
+        return [...current, provider._id]
       }
-      return current.filter((id) => id !== provider.id)
+      return current.filter((id) => id !== provider._id)
     })
   }
 
@@ -239,8 +271,28 @@ function ProviderMatching() {
 
   const editProject = () => navigate('/project/new', { state: { projectForm: project } })
 
-  const continueToNegotiation = () => {
-    navigate('/project/negotiation', { state: { project, selectedProvider } })
+  const continueToNegotiation = async () => {
+    if (isSavingSelection || !project?._id || !selectedProvider?._id) return
+
+    setIsSavingSelection(true)
+    setSelectionError('')
+
+    try {
+      const { data } = await apiClient.patch(`/projects/${project._id}/provider`, {
+        providerId: selectedProvider._id,
+      })
+      if (!data?.success || !data.data?._id) {
+        throw new Error('The API did not confirm that the provider selection was saved.')
+      }
+
+      navigate(`/project/${project._id}/negotiation`, {
+        state: { project: data.data, selectedProvider },
+      })
+    } catch (error) {
+      setSelectionError(getApiErrorMessage(error, error.message || 'The provider selection could not be saved. Please try again.'))
+    } finally {
+      setIsSavingSelection(false)
+    }
   }
 
   return (
@@ -322,7 +374,11 @@ function ProviderMatching() {
             </button>
           </div>
           <p className="mt-3 text-[9px] text-slate-500" aria-live="polite">
-            Showing <span className="font-medium text-slate-300">{visibleProviders.length}</span> of {demoProviders.length} fictional demo profiles
+            {isLoadingProviders
+              ? 'Loading fictional demo provider profiles…'
+              : providersError
+                ? 'Fictional demo provider profiles could not be loaded.'
+                : `Showing ${visibleProviders.length} of ${providers.length} fictional demo profiles`}
           </p>
         </section>
 
@@ -336,35 +392,61 @@ function ProviderMatching() {
           </p>
         </details>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Demo provider profiles">
+        {isLoadingProviders ? (
+          <div className="flex min-h-[220px] items-center justify-center rounded-2xl border border-white/[0.08] bg-[#101411] px-5 text-center text-[11px] text-slate-400" role="status" aria-busy="true">
+            Loading fictional demo providers…
+          </div>
+        ) : providersError ? (
+          <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-2xl border border-rose-400/20 bg-[#101411] px-5 py-8 text-center">
+            <p className="max-w-xl text-[11px] leading-5 text-rose-200" role="alert">{providersError}</p>
+            <button
+              className="inline-flex min-h-9 items-center rounded-lg border border-white/10 px-3 text-[10px] font-medium text-slate-200 transition-colors hover:bg-white/[0.05]"
+              type="button"
+              onClick={() => setRetryCount((count) => count + 1)}
+            >
+              Try Again
+            </button>
+          </div>
+        ) : providers.length === 0 ? (
+          <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/[0.12] bg-[#101411] px-5 py-8 text-center">
+            <h2 className="text-sm font-semibold text-slate-100">No demo providers available</h2>
+            <p className="mt-2 max-w-md text-[10px] leading-5 text-slate-400">
+              No fictional demo profiles are currently available from the API. Real provider discovery is not connected.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Demo provider profiles">
           {visibleProviders.length > 0 ? visibleProviders.map((provider) => {
-            const result = providerScores[provider.id]
+            const result = providerScores[provider._id]
             return (
               <ProviderCard
-                key={provider.id}
+                key={provider._id}
                 provider={provider}
                 score={result.score}
                 matchingSkills={result.matchingSkills}
-                isCompared={comparedIds.includes(provider.id)}
+                isCompared={comparedIds.includes(provider._id)}
                 comparisonLimitReached={comparedIds.length >= 3}
-                isSelected={selectedProvider?.id === provider.id}
+                isSelected={selectedProvider?._id === provider._id}
                 onCompareChange={handleCompareChange}
                 onSelect={setPendingProvider}
               />
             )
           }) : (
             <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center md:col-span-2 xl:col-span-3">
-              <p className="text-[11px] font-medium text-slate-300">No demo profiles match that skill keyword.</p>
+              <p className="text-[11px] font-medium text-slate-300">No fictional demo profiles match that skill keyword.</p>
               <p className="mt-1 text-[9px] text-slate-500">Try another skill or reset the filters.</p>
             </div>
           )}
-        </div>
+            </div>
 
-        <ComparisonPanel
-          providers={comparedProviders}
-          scores={providerScores}
-          onRemove={(id) => setComparedIds((current) => current.filter((providerId) => providerId !== id))}
-        />
+            <ComparisonPanel
+              providers={comparedProviders}
+              scores={providerScores}
+              onRemove={(id) => setComparedIds((current) => current.filter((providerId) => providerId !== id))}
+            />
+          </>
+        )}
 
         {pendingProvider && (
           <section className="rounded-2xl border border-[#c7f36a]/25 bg-[#11170e] p-4 sm:p-5" aria-labelledby="selection-confirmation">
@@ -390,6 +472,7 @@ function ProviderMatching() {
                     type="button"
                     onClick={() => {
                       setSelectedProvider(pendingProvider)
+                      setSelectionError('')
                       setPendingProvider(null)
                     }}
                   >
@@ -412,13 +495,20 @@ function ProviderMatching() {
                 </p>
               </div>
               <button
-                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] hover:bg-[#d4ff7c]"
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] hover:bg-[#d4ff7c] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isSavingSelection}
                 type="button"
                 onClick={continueToNegotiation}
               >
-                Continue to Negotiation Preview <ArrowRight size={14} aria-hidden="true" />
+                {isSavingSelection ? 'Saving selection…' : 'Continue to Negotiation Preview'}
+                {!isSavingSelection && <ArrowRight size={14} aria-hidden="true" />}
               </button>
             </div>
+            {selectionError && (
+              <p className="mt-3 rounded-lg border border-red-400/20 bg-red-400/[0.05] px-3 py-2 text-[10px] leading-5 text-red-200" role="alert">
+                {selectionError} You can retry without selecting the provider again.
+              </p>
+            )}
           </section>
         )}
 

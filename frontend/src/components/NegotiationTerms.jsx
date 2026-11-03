@@ -17,6 +17,10 @@ function NegotiationTerms({
   onRemoveMilestone,
   onGenerateCounteroffer,
   onPreviewSummary,
+  onSaveNegotiation,
+  isSavingNegotiation,
+  saveSuccess,
+  saveError,
 }) {
   return (
     <section className="rounded-2xl border border-white/[0.08] bg-[#101411] p-4 sm:p-5" aria-labelledby="terms-heading">
@@ -204,6 +208,14 @@ function NegotiationTerms({
         <div className="border-t border-white/[0.07] pt-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <button
+              className="inline-flex min-h-10 items-center justify-center rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] transition-colors hover:bg-[#d4ff7c] disabled:cursor-wait disabled:opacity-60"
+              type="button"
+              onClick={onSaveNegotiation}
+              disabled={isSavingNegotiation}
+            >
+              {isSavingNegotiation ? 'Saving Negotiation…' : 'Save Negotiation'}
+            </button>
+            <button
               className="inline-flex min-h-10 items-center justify-center rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] transition-colors hover:bg-[#d4ff7c]"
               type="button"
               onClick={onGenerateCounteroffer}
@@ -220,7 +232,9 @@ function NegotiationTerms({
               Preview Proposed Deal Summary
             </button>
           </div>
-          <p className="mt-2 text-[9px] leading-4 text-slate-600">These controls update local demo state only. No network request is made.</p>
+          {saveSuccess && <p className="mt-2 text-[10px] leading-5 text-[#d8f2a9]" role="status">{saveSuccess}</p>}
+          {saveError && <p className="mt-2 text-[10px] leading-5 text-rose-300" role="alert">{saveError}</p>}
+          <p className="mt-2 text-[9px] leading-4 text-slate-600">Counteroffers stay local demo activity. Saving terms stores them on this project; no real provider messages are sent.</p>
         </div>
       </div>
     </section>

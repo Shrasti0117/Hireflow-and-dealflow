@@ -24,7 +24,17 @@ function App() {
           <NegotiationPreview />
         </Suspense>
       } />
+      <Route path="/project/:projectId/negotiation" element={
+        <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
+          <NegotiationPreview />
+        </Suspense>
+      } />
       <Route path="/project/agreement" element={
+        <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
+          <AgreementPreview />
+        </Suspense>
+      } />
+      <Route path="/project/:projectId/agreement" element={
         <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
           <AgreementPreview />
         </Suspense>

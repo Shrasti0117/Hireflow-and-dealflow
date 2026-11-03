@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ArrowLeft, Check, Circle, Sparkles } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import apiClient, { getApiErrorMessage } from '../api/apiClient.js'
 import ProjectForm from '../components/ProjectForm.jsx'
 import RequirementAnalysis from '../components/RequirementAnalysis.jsx'
 
@@ -39,6 +40,9 @@ function CreateProject() {
   const navigate = useNavigate()
   const [form, setForm] = useState(() => location.state?.projectForm ?? initialForm)
   const [errors, setErrors] = useState({})
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [savedProject, setSavedProject] = useState(null)
   const [currentView, setCurrentView] = useState('form')
   const reduceMotion = useReducedMotion()
   const activeStep = currentView === 'analysis' ? 1 : 0
@@ -70,13 +74,42 @@ function CreateProject() {
     event.preventDefault()
     const nextErrors = validateForm(form)
     setErrors(nextErrors)
+    setSaveError('')
     if (Object.keys(nextErrors).length > 0) return
 
-    setCurrentView('analysis')
+    setIsSaving(true)
+    apiClient.post('/projects', {
+      ...form,
+      budget: Number(form.budget),
+    })
+      .then(({ data }) => {
+        const project = data?.data
+        if (!project?._id) {
+          throw new Error('The API response did not include a saved project ID.')
+        }
+
+        setSavedProject(project)
+        setForm({
+          title: project.title,
+          description: project.description,
+          category: project.category,
+          budget: String(project.budget),
+          timeline: project.timeline,
+          skills: project.skills,
+        })
+        setCurrentView('analysis')
+      })
+      .catch((error) => {
+        setSaveError(getApiErrorMessage(error, error.message || 'Project could not be saved. Please try again.'))
+      })
+      .finally(() => {
+        setIsSaving(false)
+      })
   }
 
   const continueToMatching = () => {
-    navigate('/project/matching', { state: { project: form } })
+    if (!savedProject?._id) return
+    navigate('/project/matching', { state: { project: savedProject } })
   }
 
   return (
@@ -165,6 +198,7 @@ function CreateProject() {
                 <ProjectForm
                   form={form}
                   errors={errors}
+                  isSaving={isSaving}
                   onChange={updateForm}
                   onAddSkill={addSkill}
                   onRemoveSkill={removeSkill}
@@ -180,20 +214,32 @@ function CreateProject() {
                 transition={{ duration: reduceMotion ? 0 : 0.18 }}
               >
                 <RequirementAnalysis
-                  form={form}
+                  form={savedProject ?? form}
                   onEdit={() => {
                     setCurrentView('form')
                   }}
                   onContinue={continueToMatching}
                 />
+                {savedProject?._id && (
+                  <p className="mt-4 rounded-lg border border-[#c7f36a]/20 bg-[#c7f36a]/[0.06] px-3 py-2.5 text-[10px] leading-5 text-[#d2e9aa]" role="status">
+                    Project saved successfully. MongoDB project ID: <span className="break-all font-mono">{savedProject._id}</span>
+                  </p>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
         </section>
 
-        <p className="mt-5 text-center text-[9px] leading-4 text-slate-600">
-          Project information stays in this page for this demo. Real AI analysis and backend persistence will be added later.
-        </p>
+        {saveError && (
+          <p className="mt-4 rounded-lg border border-rose-400/20 bg-rose-400/[0.06] px-3 py-2.5 text-[10px] leading-5 text-rose-200" role="alert">
+            {saveError}
+          </p>
+        )}
+        {currentView === 'form' && !saveError && (
+          <p className="mt-5 text-center text-[9px] leading-4 text-slate-600" aria-live="polite">
+            Project details are saved only after the backend confirms creation.
+          </p>
+        )}
       </motion.main>
     </div>
   )

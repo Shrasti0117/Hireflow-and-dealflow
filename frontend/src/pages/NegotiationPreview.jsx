@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight, CircleHelp, FileText, ShieldAlert, Sparkles } from 'lucide-react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import apiClient, { getApiErrorMessage } from '../api/apiClient.js'
 import DealSummaryPreview from '../components/DealSummaryPreview.jsx'
 import NegotiationActivity from '../components/NegotiationActivity.jsx'
 import NegotiationTerms from '../components/NegotiationTerms.jsx'
@@ -113,7 +114,10 @@ function getInitialTerms(project, selectedProvider, restoredTerms) {
       price: String(restoredTerms.price),
       timeline: restoredTerms.timeline,
       deliverables: [...restoredTerms.deliverables],
-      milestones: restoredTerms.milestones.map((milestone) => ({ ...milestone })),
+      milestones: restoredTerms.milestones.map((milestone) => ({
+        ...milestone,
+        percentage: String(milestone.percentage),
+      })),
     }
   }
 
@@ -204,16 +208,112 @@ function MissingNegotiationState() {
   )
 }
 
+function LoadingNegotiationState() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#0a0c0b] px-4 py-12 text-center text-[11px] text-slate-400" role="status" aria-busy="true">
+      Loading saved project and selected provider…
+    </main>
+  )
+}
+
+function NegotiationLoadError({ message, onRetry }) {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-[#0a0c0b] px-4 py-12 text-center text-slate-100">
+      <span className="grid h-12 w-12 place-items-center rounded-2xl border border-red-300/15 bg-red-300/[0.04] text-red-200">
+        <CircleHelp size={22} aria-hidden="true" />
+      </span>
+      <h1 className="mt-5 text-2xl font-semibold tracking-[-0.05em]">Project details could not be loaded</h1>
+      <p className="mt-2 max-w-md text-[11px] leading-5 text-slate-400">{message}</p>
+      <button
+        className="mt-6 inline-flex min-h-10 items-center justify-center rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] hover:bg-[#d4ff7c]"
+        type="button"
+        onClick={onRetry}
+      >
+        Retry loading project
+      </button>
+    </main>
+  )
+}
+
+function MissingSelectedProviderState({ project }) {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-[#0a0c0b] px-4 py-12 text-center text-slate-100">
+      <span className="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-slate-400">
+        <CircleHelp size={22} aria-hidden="true" />
+      </span>
+      <h1 className="mt-5 text-2xl font-semibold tracking-[-0.05em]">No provider selected for this project</h1>
+      <p className="mt-2 max-w-md text-[11px] leading-5 text-slate-400">
+        Choose and confirm a demo provider before opening the negotiation preview.
+      </p>
+      <Link
+        className="mt-6 inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#c7f36a] px-4 text-[10px] font-semibold text-[#171b12] hover:bg-[#d4ff7c]"
+        to="/project/matching"
+        state={{ project }}
+      >
+        Back to Provider Matching <ArrowRight size={14} aria-hidden="true" />
+      </Link>
+    </main>
+  )
+}
+
 function NegotiationPreview() {
   const location = useLocation()
   const navigate = useNavigate()
+  const { projectId } = useParams()
   const reduceMotion = useReducedMotion()
-  const project = location.state?.project
-  const selectedProvider = location.state?.selectedProvider
-  const [terms, setTerms] = useState(() => getInitialTerms(project, selectedProvider, location.state?.terms))
+  const [persistedData, setPersistedData] = useState(null)
+  const [isLoadingProject, setIsLoadingProject] = useState(Boolean(projectId))
+  const [projectLoadError, setProjectLoadError] = useState('')
+  const [retryCount, setRetryCount] = useState(0)
+  const project = projectId ? persistedData?.project : location.state?.project
+  const selectedProvider = projectId ? persistedData?.selectedProvider : location.state?.selectedProvider
+  const [terms, setTerms] = useState(() => getInitialTerms(
+    location.state?.project,
+    location.state?.selectedProvider,
+    location.state?.terms,
+  ))
   const [errors, setErrors] = useState({})
   const [activity, setActivity] = useState([])
   const [summaryVisible, setSummaryVisible] = useState(false)
+  const [isSavingNegotiation, setIsSavingNegotiation] = useState(false)
+  const [negotiationSaveError, setNegotiationSaveError] = useState('')
+  const [negotiationSaveSuccess, setNegotiationSaveSuccess] = useState('')
+  const saveInProgress = useRef(false)
+
+  useEffect(() => {
+    if (!projectId) return undefined
+
+    const controller = new AbortController()
+
+    async function loadProject() {
+      setIsLoadingProject(true)
+      setProjectLoadError('')
+
+      try {
+        const { data } = await apiClient.get(`/projects/${projectId}`, { signal: controller.signal })
+        if (!data?.success || !data.data?._id) {
+          throw new Error('The API returned an unexpected project response.')
+        }
+
+        const loadedProject = data.data
+        const loadedProvider = loadedProject.selectedProviderId
+          && typeof loadedProject.selectedProviderId === 'object'
+          ? loadedProject.selectedProviderId
+          : null
+
+        setPersistedData({ project: loadedProject, selectedProvider: loadedProvider })
+        setTerms(getInitialTerms(loadedProject, loadedProvider, loadedProject.negotiation))
+      } catch (error) {
+        if (controller.signal.aborted) return
+        setProjectLoadError(getApiErrorMessage(error, error.message || 'The saved project could not be loaded. Please try again.'))
+      } finally {
+        if (!controller.signal.aborted) setIsLoadingProject(false)
+      }
+    }
+
+    loadProject()
+    return () => controller.abort()
+  }, [projectId, retryCount])
 
   const hasValidData = isValidProject(project) && isValidProvider(selectedProvider)
   const milestoneTotal = useMemo(() => getMilestoneTotal(terms.milestones), [terms.milestones])
@@ -223,12 +323,23 @@ function NegotiationPreview() {
   )
   const hasValidTerms = Object.keys(currentValidation).length === 0
 
+  if (projectId && isLoadingProject) return <LoadingNegotiationState />
+  if (projectId && projectLoadError) {
+    return <NegotiationLoadError message={projectLoadError} onRetry={() => setRetryCount((count) => count + 1)} />
+  }
+  if (projectId && project && !selectedProvider) return <MissingSelectedProviderState project={project} />
   if (!hasValidData) return <MissingNegotiationState />
+
+  const clearSaveFeedback = () => {
+    setNegotiationSaveError('')
+    setNegotiationSaveSuccess('')
+  }
 
   const updateTerms = (event) => {
     const { name, value } = event.target
     setTerms((current) => ({ ...current, [name]: value }))
     setErrors((current) => ({ ...current, [name]: '' }))
+    clearSaveFeedback()
   }
 
   const updateDeliverable = (index, value) => {
@@ -237,6 +348,7 @@ function NegotiationPreview() {
       deliverables: current.deliverables.map((item, itemIndex) => itemIndex === index ? value : item),
     }))
     setErrors((current) => ({ ...current, deliverables: '' }))
+    clearSaveFeedback()
   }
 
   const updateMilestone = (index, field, value) => {
@@ -247,10 +359,12 @@ function NegotiationPreview() {
       )),
     }))
     setErrors((current) => ({ ...current, milestones: '' }))
+    clearSaveFeedback()
   }
 
   const addDeliverable = () => {
     setTerms((current) => ({ ...current, deliverables: [...current.deliverables, ''] }))
+    clearSaveFeedback()
   }
 
   const removeDeliverable = (index) => {
@@ -259,6 +373,7 @@ function NegotiationPreview() {
       deliverables: current.deliverables.filter((_, itemIndex) => itemIndex !== index),
     }))
     setErrors((current) => ({ ...current, deliverables: '' }))
+    clearSaveFeedback()
   }
 
   const addMilestone = () => {
@@ -266,6 +381,7 @@ function NegotiationPreview() {
       ...current,
       milestones: [...current.milestones, { name: '', description: '', percentage: '0' }],
     }))
+    clearSaveFeedback()
   }
 
   const removeMilestone = (index) => {
@@ -274,12 +390,60 @@ function NegotiationPreview() {
       milestones: current.milestones.filter((_, milestoneIndex) => milestoneIndex !== index),
     }))
     setErrors((current) => ({ ...current, milestones: '' }))
+    clearSaveFeedback()
   }
 
   const getErrors = () => {
     const nextErrors = validateTerms(terms, selectedProvider.delivery)
     setErrors(nextErrors)
     return nextErrors
+  }
+
+  const saveNegotiationTerms = async () => {
+    if (saveInProgress.current) return null
+
+    const nextErrors = getErrors()
+    if (Object.keys(nextErrors).length > 0) return null
+
+    if (!project?._id) {
+      setNegotiationSaveError('This project has no saved MongoDB ID, so negotiation terms cannot be saved.')
+      setNegotiationSaveSuccess('')
+      return null
+    }
+
+    saveInProgress.current = true
+    setIsSavingNegotiation(true)
+    setNegotiationSaveError('')
+    setNegotiationSaveSuccess('')
+
+    try {
+      const { data } = await apiClient.patch(`/projects/${project._id}/negotiation`, {
+        price: Number(terms.price),
+        timeline: terms.timeline.trim(),
+        deliverables: terms.deliverables.map((deliverable) => deliverable.trim()),
+        milestones: terms.milestones.map((milestone) => ({
+          name: milestone.name.trim(),
+          description: milestone.description.trim(),
+          percentage: Number(milestone.percentage),
+        })),
+      })
+
+      const savedNegotiation = data?.data?.negotiation
+      if (!data?.success || !savedNegotiation) {
+        throw new Error('The API did not confirm that negotiation terms were saved.')
+      }
+
+      const normalizedTerms = getInitialTerms(project, selectedProvider, savedNegotiation)
+      setTerms(normalizedTerms)
+      setNegotiationSaveSuccess('Negotiation terms saved successfully.')
+      return normalizedTerms
+    } catch (error) {
+      setNegotiationSaveError(getApiErrorMessage(error, error.message || 'Negotiation terms could not be saved. Please try again.'))
+      return null
+    } finally {
+      saveInProgress.current = false
+      setIsSavingNegotiation(false)
+    }
   }
 
   const generateCounteroffer = () => {
@@ -316,20 +480,11 @@ function NegotiationPreview() {
     setSummaryVisible(true)
   }
 
-  const continueToAgreement = () => {
-    if (Object.keys(getErrors()).length > 0) return
-    navigate('/project/agreement', {
-      state: {
-        project,
-        selectedProvider,
-        terms: {
-          ...terms,
-          price: Number(terms.price),
-          deliverables: [...terms.deliverables],
-          milestones: terms.milestones.map((milestone) => ({ ...milestone })),
-        },
-      },
-    })
+  const continueToAgreement = async () => {
+    const savedTerms = await saveNegotiationTerms()
+    if (!savedTerms) return
+
+    navigate(`/project/${project._id}/agreement`)
   }
 
   return (
@@ -385,6 +540,10 @@ function NegotiationPreview() {
               onRemoveMilestone={removeMilestone}
               onGenerateCounteroffer={generateCounteroffer}
               onPreviewSummary={previewSummary}
+              onSaveNegotiation={saveNegotiationTerms}
+              isSavingNegotiation={isSavingNegotiation}
+              saveSuccess={negotiationSaveSuccess}
+              saveError={negotiationSaveError}
             />
             {summaryVisible && hasValidTerms && (
               <DealSummaryPreview
@@ -406,7 +565,7 @@ function NegotiationPreview() {
           </aside>
         </div>
         <p className="mt-5 text-center text-[8px] leading-4 text-slate-600">
-          All terms, activity, and responses are temporary demo state in this page and are not saved.
+          Negotiation terms are saved only after confirmation from the backend. Activity and fictional responses remain temporary demo state.
         </p>
       </motion.main>
     </div>
