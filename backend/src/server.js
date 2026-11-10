@@ -1,8 +1,11 @@
 import 'dotenv/config'
 import app from './app.js'
 import { connectToDatabase } from './config/db.js'
+import { validateRazorpayConfiguration } from './services/razorpay.service.js'
 
 function getConfig() {
+  validateRazorpayConfiguration()
+
   const mongoUri = process.env.MONGODB_URI?.trim()
   const jwtSecret = process.env.JWT_SECRET?.trim()
 

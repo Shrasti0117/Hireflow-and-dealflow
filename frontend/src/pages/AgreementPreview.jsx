@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import {
   ArrowLeft,
@@ -20,6 +20,105 @@ const formatINR = (amount) => new Intl.NumberFormat('en-IN', {
   currency: 'INR',
   maximumFractionDigits: 2,
 }).format(amount)
+
+const razorpayCheckoutUrl = 'https://checkout.razorpay.com/v1/checkout.js'
+
+function loadRazorpayCheckout() {
+  if (window.Razorpay) return Promise.resolve(window.Razorpay)
+
+  return new Promise((resolve, reject) => {
+    const existingScript = document.querySelector(`script[src="${razorpayCheckoutUrl}"]`)
+    const script = existingScript ?? document.createElement('script')
+    const handleLoad = () => {
+      if (window.Razorpay) resolve(window.Razorpay)
+      else reject(new Error('Razorpay Checkout could not be initialized.'))
+    }
+    const handleError = () => reject(new Error('Razorpay Checkout could not be loaded.'))
+
+    script.addEventListener('load', handleLoad, { once: true })
+    script.addEventListener('error', handleError, { once: true })
+    if (!existingScript) {
+      script.src = razorpayCheckoutUrl
+      script.async = true
+      document.body.appendChild(script)
+    }
+  })
+}
+
+function getStoredAgreementId(projectId) {
+  try {
+    return window.localStorage.getItem(`dealflow:agreement:${projectId}`)
+  } catch {
+    return null
+  }
+}
+
+function storeAgreementId(projectId, agreementId) {
+  try {
+    window.localStorage.setItem(`dealflow:agreement:${projectId}`, agreementId)
+  } catch {
+    return false
+  }
+  return true
+}
+
+function getDraftAttemptKey(projectId) {
+  return `dealflow:agreement-attempt:${projectId}`
+}
+
+function hasPendingDraftAttempt(projectId) {
+  try {
+    return window.localStorage.getItem(getDraftAttemptKey(projectId)) === 'pending'
+  } catch {
+    return true
+  }
+}
+
+function beginDraftAttempt(projectId) {
+  try {
+    const key = getDraftAttemptKey(projectId)
+    if (window.localStorage.getItem(key)) return false
+    window.localStorage.setItem(key, 'pending')
+    return window.localStorage.getItem(key) === 'pending'
+  } catch {
+    return false
+  }
+}
+
+function clearDraftAttempt(projectId) {
+  try {
+    window.localStorage.removeItem(getDraftAttemptKey(projectId))
+  } catch {
+    return false
+  }
+  return true
+}
+
+function removeStoredAgreementId(projectId) {
+  try {
+    window.localStorage.removeItem(`dealflow:agreement:${projectId}`)
+  } catch {
+    return false
+  }
+  return true
+}
+
+function getStoredPaymentId(agreementId) {
+  try {
+    return window.localStorage.getItem(`dealflow:payment:${agreementId}`)
+  } catch {
+    return null
+  }
+}
+
+function storePaymentId(agreementId, paymentId) {
+  try {
+    window.localStorage.setItem(`dealflow:payment:${agreementId}`, paymentId)
+  } catch {
+    return false
+  }
+  return true
+}
 
 function isValidAgreementData(project, selectedProvider, terms) {
   if (
@@ -201,12 +300,19 @@ function AgreementPreview() {
   const { projectId } = useParams()
   const legacyState = location.state ?? {}
   const reduceMotion = useReducedMotion()
+  const paymentOperation = useRef(false)
+  const checkoutActive = useRef(false)
   const [persistedAgreement, setPersistedAgreement] = useState(null)
+  const [agreementRecord, setAgreementRecord] = useState(null)
+  const [paymentRecord, setPaymentRecord] = useState(null)
   const [isLoadingAgreement, setIsLoadingAgreement] = useState(Boolean(projectId))
   const [agreementLoadError, setAgreementLoadError] = useState('')
   const [retryCount, setRetryCount] = useState(0)
   const [hasReviewed, setHasReviewed] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false)
+  const [paymentError, setPaymentError] = useState('')
+  const [paymentNotice, setPaymentNotice] = useState('')
   const [legacyPreviewSession] = useState(() => projectId ? null : createPreviewSession())
 
   useEffect(() => {
@@ -277,6 +383,41 @@ function AgreementPreview() {
           terms: negotiation,
           agreementPreview: previewProject.agreementPreview,
         })
+
+        const storedAgreementId = getStoredAgreementId(projectId)
+        if (storedAgreementId) {
+          try {
+            const { data: savedAgreement } = await apiClient.get(`/agreements/${storedAgreementId}`, {
+              signal: controller.signal,
+            })
+            if (
+              savedAgreement?.success
+              && savedAgreement.data?._id === storedAgreementId
+              && String(savedAgreement.data.project) === projectId
+              && savedAgreement.data.status === 'draft'
+            ) {
+              setAgreementRecord(savedAgreement.data)
+              const storedPaymentId = getStoredPaymentId(storedAgreementId)
+              if (storedPaymentId) {
+                const { data: paymentResponse } = await apiClient.get(`/payments/${storedPaymentId}`, {
+                  signal: controller.signal,
+                })
+                if (paymentResponse?.success && paymentResponse.data?._id === storedPaymentId) {
+                  setPaymentRecord(paymentResponse.data)
+                }
+              }
+            } else {
+              removeStoredAgreementId(projectId)
+            }
+          } catch (error) {
+            if (controller.signal.aborted) return
+            if (error.response?.status === 404) {
+              removeStoredAgreementId(projectId)
+            } else {
+              throw error
+            }
+          }
+        }
       } catch (error) {
         if (controller.signal.aborted) return
         setAgreementLoadError(getApiErrorMessage(error, error.message || 'The saved agreement preview could not be loaded. Please try again.'))
@@ -293,6 +434,203 @@ function AgreementPreview() {
   const selectedProvider = projectId ? persistedAgreement?.selectedProvider : legacyState.selectedProvider
   const terms = projectId ? persistedAgreement?.terms : legacyState.terms
   const previewMetadata = projectId ? persistedAgreement?.agreementPreview : legacyPreviewSession
+
+  async function getOrCreateAgreement() {
+    if (agreementRecord?._id && agreementRecord.status === 'draft') return agreementRecord
+    if (!projectId) throw new Error('A saved project is required before starting Test Mode Checkout.')
+
+    const storedAgreementId = getStoredAgreementId(projectId)
+    if (storedAgreementId) {
+      try {
+        const { data } = await apiClient.get(`/agreements/${storedAgreementId}`)
+        if (
+          data?.success
+          && data.data?._id
+          && data.data.status === 'draft'
+          && String(data.data.project) === projectId
+        ) {
+          setAgreementRecord(data.data)
+          return data.data
+        }
+        removeStoredAgreementId(projectId)
+      } catch (error) {
+        if (error.response?.status !== 404) throw error
+        removeStoredAgreementId(projectId)
+      }
+    }
+
+    if (hasPendingDraftAttempt(projectId)) {
+      throw new Error('Agreement draft creation has an uncertain result. The app will not create another draft automatically; contact support to reconcile it before retrying.')
+    }
+    if (!beginDraftAttempt(projectId)) {
+      throw new Error('Agreement draft creation could not be safely reserved in this browser. Check storage settings and try again.')
+    }
+
+    let response
+    try {
+      response = await apiClient.post(`/projects/${projectId}/agreements`, {})
+    } catch (error) {
+      if (error.response?.status >= 400 && error.response.status < 500) {
+        clearDraftAttempt(projectId)
+      }
+      throw error
+    }
+    const { data } = response
+    if (!data?.success || !data.data?._id || data.data.status !== 'draft') {
+      throw new Error('The API did not return a persisted Agreement draft.')
+    }
+    if (!storeAgreementId(projectId, data.data._id) || !clearDraftAttempt(projectId)) {
+      throw new Error('The Agreement draft was created but could not be safely saved in this browser. Do not retry draft creation; reload or contact support to reconcile it.')
+    }
+    setAgreementRecord(data.data)
+    return data.data
+  }
+
+  async function refreshPaymentStatus(paymentId) {
+    const { data } = await apiClient.get(`/payments/${paymentId}`)
+    if (!data?.success || data.data?._id !== paymentId) {
+      throw new Error('Payment status could not be confirmed by the backend.')
+    }
+    setPaymentRecord(data.data)
+    return data.data
+  }
+
+  async function verifyCheckoutPayment(paymentId, checkoutResult) {
+    setPaymentNotice('Verifying the Razorpay Test Mode payment with DealFlow…')
+    const { data: verification } = await apiClient.post(
+      `/payments/${paymentId}/razorpay/verify`,
+      {
+        razorpay_payment_id: checkoutResult.razorpay_payment_id,
+        razorpay_order_id: checkoutResult.razorpay_order_id,
+        razorpay_signature: checkoutResult.razorpay_signature,
+      },
+    )
+    const payment = await refreshPaymentStatus(paymentId)
+    if (payment.status === 'completed') {
+      setPaymentError('')
+      setPaymentNotice('Razorpay Test Mode payment verified. No real money was transferred; this does not represent provider acceptance.')
+      return
+    }
+    if (verification?.data?.status === 'verification_pending' || payment.status === 'verification_pending') {
+      setPaymentNotice('The payment is authorized but not captured yet. No payment success is being claimed.')
+      return
+    }
+    setPaymentNotice('')
+    setPaymentError('The backend has not confirmed a completed payment. Check status and retry verification if needed.')
+  }
+
+  async function startRazorpayCheckout() {
+    if (paymentOperation.current || checkoutActive.current || isProcessingPayment || !projectId) return
+    paymentOperation.current = true
+    setIsProcessingPayment(true)
+    setPaymentError('')
+    setPaymentNotice('')
+
+    try {
+      const agreement = await getOrCreateAgreement()
+      const { data: orderResponse } = await apiClient.post(
+        `/agreements/${agreement._id}/payments/razorpay/order`,
+        {},
+      )
+      const order = orderResponse?.data
+      if (
+        !orderResponse?.success
+        || !order?.paymentId
+        || !order?.keyId
+        || !order?.orderId
+        || order.currency !== 'INR'
+        || !Number.isSafeInteger(order.amount)
+        || order.amount <= 0
+      ) {
+        throw new Error(orderResponse?.message || 'The backend did not return a valid Razorpay Test Mode order.')
+      }
+      storePaymentId(agreement._id, order.paymentId)
+      setPaymentRecord({
+        _id: order.paymentId,
+        status: 'order_created',
+        amountMinor: order.amount,
+        currency: order.currency,
+        mode: 'razorpay_test_demo',
+      })
+
+      const Razorpay = await loadRazorpayCheckout()
+      const checkout = new Razorpay({
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'DealFlow AI',
+        description: 'Razorpay Test Mode demo transaction',
+        order_id: order.orderId,
+        handler: async (checkoutResult) => {
+          paymentOperation.current = true
+          try {
+            await verifyCheckoutPayment(order.paymentId, checkoutResult)
+          } catch (error) {
+            setPaymentNotice('')
+            setPaymentError(getApiErrorMessage(error, 'Payment verification failed. Check payment status before retrying.'))
+            try {
+              const payment = await refreshPaymentStatus(order.paymentId)
+              if (payment.status === 'completed') {
+                setPaymentError('')
+                setPaymentNotice('Razorpay Test Mode payment verified. No real money was transferred; this does not represent provider acceptance.')
+              }
+            } catch {
+              setPaymentError('Payment verification could not be confirmed. Retry safely; the backend will reconcile the existing payment.')
+            }
+          } finally {
+            paymentOperation.current = false
+            checkoutActive.current = false
+            setIsProcessingPayment(false)
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            if (!paymentOperation.current) {
+              checkoutActive.current = false
+              setIsProcessingPayment(false)
+              setPaymentNotice('Checkout was closed. No payment success has been confirmed.')
+            }
+          },
+        },
+        theme: { color: '#c7f36a' },
+      })
+      checkout.on('payment.failed', () => {
+        setPaymentError('Razorpay did not complete the Test Mode payment. You can try again.')
+        setPaymentNotice('')
+        if (!paymentOperation.current) {
+          checkoutActive.current = false
+          setIsProcessingPayment(false)
+        }
+      })
+      checkoutActive.current = true
+      checkout.open()
+    } catch (error) {
+      checkoutActive.current = false
+      setPaymentError(getApiErrorMessage(error, error.message || 'Razorpay Test Mode Checkout could not be started.'))
+    } finally {
+      paymentOperation.current = false
+      setIsProcessingPayment(checkoutActive.current)
+    }
+  }
+
+  async function retryPaymentStatus() {
+    const paymentId = paymentRecord?._id
+    if (!paymentId || paymentOperation.current || checkoutActive.current) return
+    paymentOperation.current = true
+    setIsProcessingPayment(true)
+    setPaymentError('')
+    try {
+      const payment = await refreshPaymentStatus(paymentId)
+      setPaymentNotice(payment.status === 'completed'
+        ? 'Razorpay Test Mode payment verified. No real money was transferred; this does not represent provider acceptance.'
+        : `Backend payment status: ${payment.status}.`)
+    } catch (error) {
+      setPaymentError(getApiErrorMessage(error, 'Payment status could not be refreshed.'))
+    } finally {
+      paymentOperation.current = false
+      setIsProcessingPayment(false)
+    }
+  }
 
   if (projectId && isLoadingAgreement) return <LoadingAgreementState />
   if (projectId && agreementLoadError) {
@@ -476,7 +814,7 @@ function AgreementPreview() {
               <div className="space-y-4">
                 <p className="flex items-start gap-2 rounded-lg border border-amber-300/15 bg-amber-300/[0.035] px-3 py-2.5 text-[9px] leading-5 text-slate-400">
                   <ShieldAlert className="mt-0.5 shrink-0 text-amber-100/80" size={13} aria-hidden="true" />
-                  This preview is not signed and has not been accepted by the other party. It is not stored and does not initiate a payment.
+                  This preview is not signed and has not been accepted by the other party. Confirming it does not create an Agreement draft or initiate a payment.
                 </p>
                 <label className="flex cursor-pointer items-start gap-2.5 text-[10px] leading-5 text-slate-300">
                   <input
@@ -515,8 +853,60 @@ function AgreementPreview() {
                   <div>
                     <h3 className="text-[11px] font-semibold text-slate-100">You reviewed the proposed terms</h3>
                     <p className="mt-1.5 text-[9px] leading-5 text-slate-400">
-                      This confirmation is frontend demo state only. No legal agreement has been signed, no agreement has been stored, and no payment has been initiated. The selected provider has not accepted these terms.
+                      This confirmation is frontend demo state only. It is not a signature or provider acceptance. A persisted unsigned draft is created only if you choose to start the clearly labelled Test Mode payment.
                     </p>
+                    <div className="mt-4 rounded-lg border border-sky-300/15 bg-sky-300/[0.035] p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[9px] font-semibold uppercase tracking-[0.1em] text-sky-100">Razorpay Test Mode</p>
+                          <p className="mt-1 text-[9px] text-slate-400">
+                            {Number.isSafeInteger(paymentRecord?.amountMinor)
+                              ? `Checkout amount: ${formatINR(paymentRecord.amountMinor / 100)}`
+                              : `Proposed amount: ${formatINR(price)}; the backend determines the final checkout amount.`}
+                          </p>
+                        </div>
+                        {projectId ? (
+                          <button
+                            className="inline-flex min-h-9 items-center justify-center rounded-lg bg-[#c7f36a] px-3 text-[9px] font-semibold text-[#171b12] transition-colors hover:bg-[#d4ff7c] disabled:cursor-not-allowed disabled:opacity-40"
+                            disabled={isProcessingPayment || paymentRecord?.status === 'completed'}
+                            onClick={startRazorpayCheckout}
+                            type="button"
+                          >
+                            {isProcessingPayment
+                              ? 'Preparing secure checkout…'
+                              : paymentRecord?.status === 'completed'
+                                ? 'Payment completed'
+                                : 'Pay with Razorpay'}
+                          </button>
+                        ) : (
+                          <p className="text-[9px] text-slate-400">Save this project to enable Test Mode Checkout.</p>
+                        )}
+                      </div>
+                      <p className="mt-2 text-[8px] leading-4 text-slate-500">
+                        Demo transaction only. Test Mode does not transfer real money and does not mean the provider accepted or signed the agreement.
+                      </p>
+                      {paymentRecord?.status === 'completed' && (
+                        <p className="mt-2 text-[9px] font-medium text-[#d8f2a9]" role="status">
+                          Backend-confirmed Test Mode payment. Provider acceptance and Agreement status remain unchanged.
+                        </p>
+                      )}
+                      {paymentError && (
+                        <p className="mt-2 text-[9px] leading-4 text-red-200" role="alert">{paymentError}</p>
+                      )}
+                      {paymentNotice && (
+                        <p className="mt-2 text-[9px] leading-4 text-slate-300" role="status">{paymentNotice}</p>
+                      )}
+                      {paymentRecord && paymentRecord.status !== 'completed' && (
+                        <button
+                          className="mt-2 inline-flex min-h-8 items-center rounded-md border border-white/10 px-2.5 text-[8px] font-medium text-slate-300 transition-colors hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={isProcessingPayment}
+                          onClick={retryPaymentStatus}
+                          type="button"
+                        >
+                          Refresh payment status
+                        </button>
+                      )}
+                    </div>
                     <button
                       className="mt-3 inline-flex min-h-9 items-center justify-center rounded-lg border border-white/10 px-3 text-[9px] font-medium text-slate-300 hover:bg-white/[0.04]"
                       onClick={() => {
@@ -535,7 +925,7 @@ function AgreementPreview() {
         </section>
 
         <p className="mt-4 text-center text-[8px] leading-4 text-slate-600">
-          Preview metadata is stored on this project. It is not a contract, signing record, provider acceptance, or payment.
+          Preview metadata is stored on this project. A Test Mode payment is separate and does not create a contract, signing record, or provider acceptance.
         </p>
       </motion.main>
     </div>
