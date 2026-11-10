@@ -9,9 +9,13 @@
     "seed:providers": "node src/scripts/seedProviders.js"
   },
   "dependencies": {
+    "argon2": "^0.45.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.7.3",
+    "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.9.5"
   }
 }

@@ -4,9 +4,14 @@ import { connectToDatabase } from './config/db.js'
 
 function getConfig() {
   const mongoUri = process.env.MONGODB_URI?.trim()
+  const jwtSecret = process.env.JWT_SECRET?.trim()
 
   if (!mongoUri) {
     throw new Error('MONGODB_URI is required. Set it in backend/.env before starting the server.')
+  }
+
+  if (!jwtSecret) {
+    throw new Error('JWT_SECRET is required. Set it in backend/.env before starting the server.')
   }
 
   let parsedMongoUri

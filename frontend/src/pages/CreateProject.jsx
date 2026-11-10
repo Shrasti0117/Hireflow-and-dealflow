@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ArrowLeft, Check, Circle, Sparkles } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
@@ -44,6 +44,9 @@ function CreateProject() {
   const [saveError, setSaveError] = useState('')
   const [savedProject, setSavedProject] = useState(null)
   const [currentView, setCurrentView] = useState('form')
+  const isSubmitting = useRef(false)
+  const pendingSubmission = useRef(null)
+  const [isRetryAvailable, setIsRetryAvailable] = useState(false)
   const reduceMotion = useReducedMotion()
   const activeStep = currentView === 'analysis' ? 1 : 0
 
@@ -70,41 +73,68 @@ function CreateProject() {
     }))
   }
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
-    const nextErrors = validateForm(form)
+    if (isSubmitting.current) return
+
+    const retryingAmbiguousRequest = isRetryAvailable && pendingSubmission.current
+    const nextErrors = retryingAmbiguousRequest ? {} : validateForm(form)
     setErrors(nextErrors)
     setSaveError('')
     if (Object.keys(nextErrors).length > 0) return
 
-    setIsSaving(true)
-    apiClient.post('/projects', {
-      ...form,
-      budget: Number(form.budget),
-    })
-      .then(({ data }) => {
-        const project = data?.data
-        if (!project?._id) {
-          throw new Error('The API response did not include a saved project ID.')
-        }
+    if (!pendingSubmission.current) {
+      pendingSubmission.current = {
+        key: crypto.randomUUID(),
+        payload: {
+          ...form,
+          budget: Number(form.budget),
+        },
+      }
+    } else if (!retryingAmbiguousRequest) {
+      pendingSubmission.current.payload = {
+        ...form,
+        budget: Number(form.budget),
+      }
+    }
 
-        setSavedProject(project)
-        setForm({
-          title: project.title,
-          description: project.description,
-          category: project.category,
-          budget: String(project.budget),
-          timeline: project.timeline,
-          skills: project.skills,
-        })
-        setCurrentView('analysis')
+    isSubmitting.current = true
+    setIsSaving(true)
+    try {
+      const { data } = await apiClient.post('/projects', pendingSubmission.current.payload, {
+        timeout: 15000,
+        headers: { 'Idempotency-Key': pendingSubmission.current.key },
       })
-      .catch((error) => {
+      const project = data?.data
+      if (!project?._id) {
+        throw new Error('The API response did not include a saved project ID.')
+      }
+
+      pendingSubmission.current = null
+      setIsRetryAvailable(false)
+      setSavedProject(project)
+      setForm({
+        title: project.title,
+        description: project.description,
+        category: project.category,
+        budget: String(project.budget),
+        timeline: project.timeline,
+        skills: project.skills,
+      })
+      setCurrentView('analysis')
+    } catch (error) {
+      const status = error.response?.status
+      const isAmbiguousFailure = !error.response || status >= 500
+      setIsRetryAvailable(isAmbiguousFailure)
+      if (isAmbiguousFailure) {
+        setSaveError('The save could not be confirmed. Retry to safely check the same project request; it will not create a duplicate.')
+      } else {
         setSaveError(getApiErrorMessage(error, error.message || 'Project could not be saved. Please try again.'))
-      })
-      .finally(() => {
-        setIsSaving(false)
-      })
+      }
+    } finally {
+      isSubmitting.current = false
+      setIsSaving(false)
+    }
   }
 
   const continueToMatching = () => {
@@ -199,6 +229,7 @@ function CreateProject() {
                   form={form}
                   errors={errors}
                   isSaving={isSaving}
+                  isRetryAvailable={isRetryAvailable}
                   onChange={updateForm}
                   onAddSkill={addSkill}
                   onRemoveSkill={removeSkill}

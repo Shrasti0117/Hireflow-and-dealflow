@@ -53,6 +53,20 @@ const agreementPreviewSchema = new mongoose.Schema({
 })
 
 const projectSchema = new mongoose.Schema({
+  owner: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false,
+    index: true,
+  },
+  idempotencyKey: {
+    type: String,
+    select: false,
+  },
+  idempotencyFingerprint: {
+    type: String,
+    select: false,
+  },
   title: {
     type: String,
     required: [true, 'Project title is required.'],
@@ -127,6 +141,15 @@ const projectSchema = new mongoose.Schema({
   timestamps: true,
   versionKey: false,
 })
+
+projectSchema.index(
+  { owner: 1, idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKey: { $type: 'string' } },
+    name: 'unique_project_idempotency_per_owner',
+  },
+)
 
 const Project = mongoose.model('Project', projectSchema)
 

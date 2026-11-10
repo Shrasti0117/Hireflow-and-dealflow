@@ -37,7 +37,7 @@ function FieldError({ id, error }) {
   ) : null
 }
 
-function ProjectForm({ form, errors, isSaving, onChange, onAddSkill, onRemoveSkill, onSubmit }) {
+function ProjectForm({ form, errors, isSaving, isRetryAvailable, onChange, onAddSkill, onRemoveSkill, onSubmit }) {
   const formId = useId()
 
   const labelClass = 'block text-[11px] font-medium text-slate-200'
@@ -46,7 +46,7 @@ function ProjectForm({ form, errors, isSaving, onChange, onAddSkill, onRemoveSki
 
   return (
     <form className="space-y-5" noValidate onSubmit={onSubmit} aria-busy={isSaving}>
-      <fieldset className="space-y-5 border-0 p-0" disabled={isSaving}>
+      <fieldset className="space-y-5 border-0 p-0" disabled={isSaving || isRetryAvailable}>
       <div className="space-y-2">
         <label className={labelClass} htmlFor={`${formId}-title`}>Project title{requiredMark}</label>
         <input
@@ -154,19 +154,20 @@ function ProjectForm({ form, errors, isSaving, onChange, onAddSkill, onRemoveSki
         onRemove={onRemoveSkill}
         error={errors.skills}
       />
+      </fieldset>
 
       <div className="border-t border-white/[0.07] pt-5">
         <button
           className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#c7f36a] px-4 text-[11px] font-semibold text-[#171b12] transition-colors hover:bg-[#d4ff7c] disabled:cursor-wait disabled:opacity-70 sm:w-auto"
           type="submit"
+          disabled={isSaving}
         >
-          {isSaving ? 'Saving Project…' : 'Save Project & Review Demo Analysis'} <ArrowRight size={15} aria-hidden="true" />
+          {isSaving ? 'Saving Project…' : isRetryAvailable ? 'Retry Save (same project)' : 'Save Project & Review Demo Analysis'} <ArrowRight size={15} aria-hidden="true" />
         </button>
         <p className="mt-2 text-[10px] text-slate-500">
           Saving stores this project in your DealFlow workspace. No AI API is called.
         </p>
       </div>
-      </fieldset>
     </form>
   )
 }

@@ -6,6 +6,7 @@ import Landing from './pages/Landing.jsx'
 import Login from './pages/Login.jsx'
 import ProviderMatching from './pages/ProviderMatching.jsx'
 import Register from './pages/Register.jsx'
+import ProtectedRoute from './components/ProtectedRoute.jsx'
 
 const NegotiationPreview = lazy(() => import('./pages/NegotiationPreview.jsx'))
 const AgreementPreview = lazy(() => import('./pages/AgreementPreview.jsx'))
@@ -16,29 +17,31 @@ function App() {
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
-      <Route path="/dashboard" element={<ClientDashboard />} />
-      <Route path="/project/new" element={<CreateProject />} />
-      <Route path="/project/matching" element={<ProviderMatching />} />
-      <Route path="/project/negotiation" element={
-        <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
-          <NegotiationPreview />
-        </Suspense>
-      } />
-      <Route path="/project/:projectId/negotiation" element={
-        <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
-          <NegotiationPreview />
-        </Suspense>
-      } />
-      <Route path="/project/agreement" element={
-        <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
-          <AgreementPreview />
-        </Suspense>
-      } />
-      <Route path="/project/:projectId/agreement" element={
-        <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
-          <AgreementPreview />
-        </Suspense>
-      } />
+      <Route element={<ProtectedRoute />}>
+        <Route path="/dashboard" element={<ClientDashboard />} />
+        <Route path="/project/new" element={<CreateProject />} />
+        <Route path="/project/matching" element={<ProviderMatching />} />
+        <Route path="/project/negotiation" element={
+          <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
+            <NegotiationPreview />
+          </Suspense>
+        } />
+        <Route path="/project/:projectId/negotiation" element={
+          <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
+            <NegotiationPreview />
+          </Suspense>
+        } />
+        <Route path="/project/agreement" element={
+          <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
+            <AgreementPreview />
+          </Suspense>
+        } />
+        <Route path="/project/:projectId/agreement" element={
+          <Suspense fallback={<main className="min-h-screen bg-[#0a0c0b]" aria-busy="true" />}>
+            <AgreementPreview />
+          </Suspense>
+        } />
+      </Route>
     </Routes>
   )
 }

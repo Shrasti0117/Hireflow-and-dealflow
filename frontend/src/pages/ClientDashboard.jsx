@@ -139,7 +139,7 @@ function ClientDashboard() {
                 <h2 className="text-sm font-semibold tracking-[-0.02em] text-slate-100" id="projects-heading">
                   Saved projects
                 </h2>
-                <p className="mt-1 text-[10px] text-slate-500">Projects are currently shared across this database until account access is implemented.</p>
+                <p className="mt-1 text-[10px] text-slate-500">Your projects are private to your account.</p>
               </div>
             </div>
             {isLoadingProjects ? (

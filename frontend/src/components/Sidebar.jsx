@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   BadgeDollarSign,
@@ -10,7 +11,9 @@ import {
   UsersRound,
   X,
 } from 'lucide-react'
-import { Link, NavLink } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { getApiErrorMessage } from '../api/apiClient.js'
+import { useAuth } from '../context/AuthContext.jsx'
 
 const primaryNavigation = [
   { label: 'Dashboard', to: '/dashboard', Icon: LayoutDashboard, available: true },
@@ -34,7 +37,7 @@ function Brand() {
   )
 }
 
-function NavigationItems({ onNavigate }) {
+function NavigationItems({ onNavigate, onLogout, logoutError }) {
   return (
     <>
       <div className="space-y-1">
@@ -83,20 +86,36 @@ function NavigationItems({ onNavigate }) {
         <Settings size={17} strokeWidth={1.8} aria-hidden="true" />
         Settings
       </button>
-      <Link
+      <button
         className="mt-1 flex min-h-10 items-center gap-3 rounded-lg px-3 text-[12px] text-slate-400 transition-colors hover:bg-white/[0.04] hover:text-slate-100"
-        to="/"
-        onClick={onNavigate}
+        type="button"
+        onClick={onLogout}
       >
         <LogOut size={17} strokeWidth={1.8} aria-hidden="true" />
         Logout
-      </Link>
+      </button>
+      {logoutError && <p className="px-3 py-2 text-[10px] text-rose-300" role="alert">{logoutError}</p>}
     </>
   )
 }
 
 function Sidebar({ open, onClose }) {
   const reduceMotion = useReducedMotion()
+  const navigate = useNavigate()
+  const { user, logout } = useAuth()
+  const [logoutError, setLogoutError] = useState('')
+  const initials = user?.name?.trim().charAt(0).toUpperCase() || 'C'
+
+  const handleLogout = async () => {
+    setLogoutError('')
+    try {
+      await logout()
+      onClose?.()
+      navigate('/login', { replace: true })
+    } catch (error) {
+      setLogoutError(getApiErrorMessage(error, 'Could not log out. Please try again.'))
+    }
+  }
 
   return (
     <>
@@ -106,13 +125,13 @@ function Sidebar({ open, onClose }) {
           <p className="mb-3 px-3 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-600">
             Workspace
           </p>
-          <NavigationItems />
+          <NavigationItems onLogout={handleLogout} logoutError={logoutError} />
         </nav>
         <div className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-3">
           <div className="flex items-center gap-2.5">
-            <span className="grid h-8 w-8 place-items-center rounded-full border border-white/10 bg-[#1b211a] text-xs font-semibold text-[#d8e8be]">C</span>
+            <span className="grid h-8 w-8 place-items-center rounded-full border border-white/10 bg-[#1b211a] text-xs font-semibold text-[#d8e8be]">{initials}</span>
             <span className="min-w-0">
-              <span className="block text-[11px] font-medium text-slate-200">Client</span>
+              <span className="block text-[11px] font-medium text-slate-200">{user?.name || 'Client'}</span>
               <span className="block text-[9px] text-slate-500">Client workspace</span>
             </span>
           </div>
@@ -155,13 +174,13 @@ function Sidebar({ open, onClose }) {
                 <p className="mb-3 px-3 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-600">
                   Workspace
                 </p>
-                <NavigationItems onNavigate={onClose} />
+                <NavigationItems onNavigate={onClose} onLogout={handleLogout} logoutError={logoutError} />
               </nav>
               <div className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-3">
                 <div className="flex items-center gap-2.5">
-                  <span className="grid h-8 w-8 place-items-center rounded-full border border-white/10 bg-[#1b211a] text-xs font-semibold text-[#d8e8be]">C</span>
+                  <span className="grid h-8 w-8 place-items-center rounded-full border border-white/10 bg-[#1b211a] text-xs font-semibold text-[#d8e8be]">{initials}</span>
                   <span>
-                    <span className="block text-[11px] font-medium text-slate-200">Client</span>
+                    <span className="block text-[11px] font-medium text-slate-200">{user?.name || 'Client'}</span>
                     <span className="block text-[9px] text-slate-500">Client workspace</span>
                   </span>
                 </div>

@@ -12,8 +12,20 @@ function errorHandler(error, request, response, next) {
     console.error(`Unhandled request error (${error.name || 'Error'}).`)
   }
 
+  const safeMessages = {
+    400: 'Invalid request.',
+    401: 'Authentication required.',
+    403: 'Access denied.',
+    404: 'Resource not found.',
+    409: 'Request conflicts with existing data.',
+    413: 'Request is too large.',
+    415: 'Unsupported request content type.',
+    422: 'Request could not be processed.',
+    429: 'Too many requests. Please try again later.',
+  }
+
   response.status(status).json({
-    error: status === 500 ? 'Internal server error.' : error.message,
+    error: safeMessages[status] || (status === 500 ? 'Internal server error.' : 'Request failed.'),
   })
 }
 

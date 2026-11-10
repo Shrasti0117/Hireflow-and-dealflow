@@ -7,10 +7,13 @@ import {
   updateProjectNegotiation,
   updateSelectedProvider,
 } from '../controllers/project.controller.js'
+import { protect } from '../middleware/auth.middleware.js'
+import { requireCsrf } from '../middleware/csrf.middleware.js'
 
 const router = Router()
 
-// These project endpoints are currently public; authentication and authorization are not implemented.
+router.use(protect, requireCsrf)
+
 router.post('/', createProject)
 router.get('/', getProjects)
 router.patch('/:id/provider', updateSelectedProvider)
