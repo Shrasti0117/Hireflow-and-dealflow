@@ -172,10 +172,23 @@ test('allows an Agreement without a providerUser account link', () => {
 })
 
 const agreementTestMongoUri = process.env.AGREEMENT_TEST_MONGODB_URI
+function assertAgreementTestDatabase(uri) {
+  const parsedMongoUri = new URL(uri)
+  const databaseName = decodeURIComponent(
+    parsedMongoUri.pathname.replace(/^\/+/, ''),
+  )
+
+  assert.match(
+    databaseName,
+    /test/i,
+    'AGREEMENT_TEST_MONGODB_URI must target a test database',
+  )
+}
 
 test('MongoDB unique indexes reject duplicate project versions, pending agreements, and draft fingerprints', {
   skip: !agreementTestMongoUri,
 }, async () => {
+  assertAgreementTestDatabase(agreementTestMongoUri)
   await mongoose.connect(agreementTestMongoUri)
   const projectId = new mongoose.Types.ObjectId()
   const snapshot = createSnapshot()

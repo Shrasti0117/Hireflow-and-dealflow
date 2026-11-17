@@ -67,11 +67,24 @@ async function request(path, { user, key, payload, csrf = true, method = 'POST',
 }
 
 before(async () => {
-  if (!process.env.MONGODB_URI || !process.env.JWT_SECRET?.trim()) {
-    throw new Error('Integration tests require configured MongoDB and JWT settings.')
+  const mongoUri = process.env.PROJECT_IDEMPOTENCY_TEST_MONGODB_URI
+
+  if (!mongoUri || !process.env.JWT_SECRET?.trim()) {
+    throw new Error('Project idempotency tests require a dedicated test MongoDB URI and JWT secret.')
   }
 
-  await mongoose.connect(process.env.MONGODB_URI)
+  const parsedMongoUri = new URL(mongoUri)
+  const databaseName = decodeURIComponent(
+    parsedMongoUri.pathname.replace(/^\/+/, ''),
+  )
+
+  assert.match(
+    databaseName,
+    /test/i,
+    'PROJECT_IDEMPOTENCY_TEST_MONGODB_URI must target a test database',
+  )
+
+  await mongoose.connect(mongoUri)
   await Project.init()
 
   const origin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
